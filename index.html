@@ -1,0 +1,685 @@
+// FILE: api/index.js (Fixed Vercel Serverless Function)
+const LUA_SCRIPT = `-- [[ WANZZMIXER V7.2 - SERVERLESS EDITION (COR & DMX_512 FULL ACCESS) ]]
+if _G.WANZZMIXER and _G.WANZZMIXER.stop then pcall(_G.WANZZMIXER.stop) end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local LP = Players.LocalPlayer
+
+local floor, sin, cos, abs, pi, random = math.floor, math.sin, math.cos, math.abs, math.pi, math.random
+local function clamp(v, a, b) return (v < a and a) or (v > b and b) or v end
+local function round(v) return floor(v + 0.5) end
+local function lerp(a, b, t) return a + (b - a) * clamp(t, 0, 1) end
+local function clone(t)
+  if type(t) ~= "table" then return t end
+  local r = {}
+  for k, v in pairs(t) do r[k] = clone(v) end
+  return r
+end
+
+local BEAM_PROFILES = {
+  R1 = {label = "Rig A (Pan=1, Tilt=2, Dim=3/6/7/8, Col=9, Gobo=10)", map = {pan=1, tilt=2, dimmer={3,6,7,8}, strobe=4, prisma=5, color=9, gobo=10, focus=12}},
+  R2 = {label = "Rig B [Tukar P/T] (Tilt=1, Pan=2, Dim=3/6/7/8)", map = {tilt=1, pan=2, dimmer={3,6,7,8}, strobe=4, prisma=5, color=9, gobo=10, focus=12}},
+  R3 = {label = "Rig C (Dim=1, Pan=2, Tilt=3, Strobe=4, Col=6, Gobo=7)", map = {dimmer=1, pan=2, tilt=3, strobe=4, prisma=5, color=6, gobo=7, focus=8}},
+  R4 = {label = "Standar 16Ch (Pan=1, Tilt=3, Dim=6, Shut=7, Col=8, Gobo=9)", map = {pan=1, tilt=3, dimmer=6, strobe=7, color=8, gobo=9, prisma=11, focus=13}},
+  CUSTOM = {label = "Profil Custom Terkunci (Hasil Scan / Set Manual)", map = {pan=1, tilt=2, dimmer={3,6,7,8}, strobe=4, prisma=5, color=9, gobo=10, focus=12}}
+}
+
+local MODELS = {
+  {name="Clara S 14R",   ch=16, kind="beam",    map={}, fixed={}},
+  {name="Strobe 1000W",  ch=8,  kind="strobe",  map={dimmer={1,2,3,4,5,6,7}, strobe=8}, fixed={}},
+  {name="3x1 Apple Led", ch=12, kind="led",     map={dimmer=1, r=2, g=3, b=4, strobe=5}, fixed={}},
+  {name="Parled",        ch=6,  kind="par",     map={dimmer=1, r=2, g=3, b=4, strobe=5}, fixed={}},
+  {name="Fogger 3000W",  ch=1,  kind="fog",     map={dimmer=1}, fixed={}},
+  {name="Blinder 4x100", ch=4,  kind="blinder", map={dimmer={1,2,3,4}}, fixed={}},
+  {name="Flower 300W",   ch=8,  kind="led",     map={dimmer=1, r=2, g=3, b=4, strobe=5}, fixed={}},
+}
+
+local PT_SHAPES = {
+  "OFF","Circle","Figure 8","Ballyhoo","Tilt Wave","Pan Wave","Swing","CanCan",
+  "Fan Spread","V-Formation","Crown","Spiral Zoom","Infinity","Butterfly","Pendulum","Cross Matrix",
+  "Matrix Wave 28","Tunnel 28","Helicopter","Searchlight","Pan Sin","Tilt Sin","Line Diag","Box Smooth"
+}
+
+local DEF_PT = {
+  ["OFF"]            ={panSize=0, tiltSize=0, speed=0.40,spread=0,  rep=0, dir=1,mir=false,inv=false,smooth=88},
+  ["Circle"]         ={panSize=65,tiltSize=65,speed=0.35,spread=25, rep=0, dir=1,mir=true, inv=false,smooth=88},
+  ["Figure 8"]       ={panSize=75,tiltSize=55,speed=0.30,spread=30, rep=0, dir=1,mir=true, inv=false,smooth=90},
+  ["Ballyhoo"]       ={panSize=85,tiltSize=70,speed=0.28,spread=40, rep=0, dir=1,mir=true, inv=true, smooth=92},
+  ["Tilt Wave"]      ={panSize=0, tiltSize=80,speed=0.45,spread=26, rep=0, dir=1,mir=false,inv=false,smooth=90},
+  ["Pan Wave"]       ={panSize=80,tiltSize=0, speed=0.40,spread=25, rep=0, dir=1,mir=true, inv=false,smooth=90},
+  ["Swing"]          ={panSize=70,tiltSize=45,speed=0.38,spread=20, rep=0, dir=1,mir=true, inv=false,smooth=88},
+  ["CanCan"]         ={panSize=30,tiltSize=85,speed=0.55,spread=180,rep=2, dir=1,mir=true, inv=false,smooth=86},
+  ["Fan Spread"]     ={panSize=90,tiltSize=55,speed=0.25,spread=15, rep=0, dir=1,mir=false,inv=false,smooth=92},
+  ["V-Formation"]    ={panSize=65,tiltSize=75,speed=0.32,spread=20, rep=0, dir=1,mir=true, inv=false,smooth=90},
+  ["Crown"]          ={panSize=60,tiltSize=75,speed=0.30,spread=45, rep=4, dir=1,mir=true, inv=false,smooth=90},
+  ["Spiral Zoom"]    ={panSize=85,tiltSize=85,speed=0.28,spread=25, rep=0, dir=1,mir=true, inv=false,smooth=92},
+  ["Infinity"]       ={panSize=85,tiltSize=45,speed=0.32,spread=25, rep=0, dir=1,mir=true, inv=false,smooth=92},
+  ["Butterfly"]      ={panSize=80,tiltSize=70,speed=0.26,spread=35, rep=2, dir=1,mir=true, inv=true, smooth=90},
+  ["Pendulum"]       ={panSize=75,tiltSize=50,speed=0.35,spread=15, rep=0, dir=1,mir=true, inv=false,smooth=92},
+  ["Cross Matrix"]   ={panSize=70,tiltSize=70,speed=0.40,spread=180,rep=2, dir=1,mir=true, inv=true, smooth=88},
+  ["Matrix Wave 28"] ={panSize=55,tiltSize=80,speed=0.38,spread=25, rep=14,dir=1,mir=true, inv=true, smooth=92},
+  ["Tunnel 28"]      ={panSize=75,tiltSize=75,speed=0.32,spread=15, rep=7, dir=1,mir=true, inv=false,smooth=90},
+  ["Helicopter"]     ={panSize=95,tiltSize=55,speed=0.48,spread=52, rep=7, dir=1,mir=false,inv=true, smooth=86},
+  ["Searchlight"]    ={panSize=90,tiltSize=70,speed=0.22,spread=32, rep=0, dir=1,mir=true, inv=false,smooth=94},
+  ["Pan Sin"]        ={panSize=75,tiltSize=0, speed=0.40,spread=20, rep=0, dir=1,mir=true, inv=false,smooth=90},
+  ["Tilt Sin"]       ={panSize=0, tiltSize=75,speed=0.40,spread=20, rep=0, dir=1,mir=false,inv=false,smooth=90},
+  ["Line Diag"]      ={panSize=65,tiltSize=65,speed=0.38,spread=25, rep=0, dir=1,mir=true, inv=false,smooth=88},
+  ["Box Smooth"]     ={panSize=65,tiltSize=65,speed=0.30,spread=90, rep=4, dir=1,mir=true, inv=false,smooth=85},
+}
+
+local DIM_SHAPES = {"OFF","Sinus Wave","Soft Breathe","Sparkle Smooth","Center Out","Bounce KITT","Pulse 1:1","Pulse 2:1","Chase Odd/Even","Random Flash"}
+local DEF_DIM = {
+  ["OFF"]={speed=0.8,spread=60,rep=0,size=255}, ["Sinus Wave"]={speed=0.65,spread=30,rep=0,size=255},
+  ["Soft Breathe"]={speed=0.35,spread=15,rep=0,size=230}, ["Sparkle Smooth"]={speed=0.9,spread=85,rep=0,size=255},
+  ["Center Out"]={speed=0.6,spread=25,rep=0,size=255}, ["Bounce KITT"]={speed=0.5,spread=20,rep=0,size=255},
+  ["Pulse 1:1"]={speed=0.85,spread=45,rep=4,size=255}, ["Pulse 2:1"]={speed=0.85,spread=45,rep=3,size=255},
+  ["Chase Odd/Even"]={speed=1.0,spread=180,rep=2,size=255}, ["Random Flash"]={speed=1.2,spread=60,rep=0,size=255}
+}
+
+local FILE = "wanzzmixer_v72.json"
+local SEND_HZ = 60
+
+local S = {
+  master=100, blackout=false, beamProfile="R1",
+  ptShape="OFF", panCenter=128, tiltCenter=128, ptPhase=0, ptConfigs=clone(DEF_PT),
+  dimShape="OFF", dimPhase=0, dimConfigs=clone(DEF_DIM),
+  singleSelectPro=false,
+  chaseSteps={}, chaseBanks={}, chasePlay=false, chaseBpm=90, chaseCross=65, chaseHold=35,
+  chaseIncShape=true, chaseLoop=true, chaseDir=1, chaseIdx=1, chaseT=0,
+  snd={
+    powerOn=false, currentId="", playing=false, vol=100, pitch=100,
+    subGain=100, midGain=100, highGain=100, beatSyncDim=false, beatSyncStrobe=false,
+    beatSens=65, liveLoudness=0,
+    playlist={["DJ Horeg Bass 1"]="1837879082", ["Check Sound Tiban"]="9043887091", ["Sub Test Tone"]="1848354536"},
+    objs={}, rems={}, pwrBtns={}, guiInps={}
+  },
+  cues={}, cuePage=1, cueSel=nil, model=1, labelDmx=false, layoutMode="2baris", scale=1,
+  test={on=false, ch=1, val=255, autoScan=false, scanTimer=0},
+  car=false, carName="BELUM ADA", autoScanRemote=true, running=true,
+  fixtures={}, conns={}, saves={}, remote=nil, activeSlider=nil, lastClick=0
+}
+
+local UI = {
+  tabBtns={}, tabFrames={}, stripBtns={}, profBtns={}, modelBtns={},
+  ptBtns={}, dimBtns={}, dirBtns={}, nodes={}
+}
+
+local function curPT()
+  if not S.ptConfigs[S.ptShape] then S.ptConfigs[S.ptShape] = clone(DEF_PT[S.ptShape] or DEF_PT["Circle"]) end
+  return S.ptConfigs[S.ptShape]
+end
+local function curDim()
+  if not S.dimConfigs[S.dimShape] then S.dimConfigs[S.dimShape] = clone(DEF_DIM[S.dimShape] or DEF_DIM["Sinus Wave"]) end
+  return S.dimConfigs[S.dimShape]
+end
+
+local function canClick()
+  local n = os.clock()
+  if n - S.lastClick < 0.05 then return false end
+  S.lastClick = n; return true
+end
+
+local function applyBeamProfile(k)
+  local p = BEAM_PROFILES[k] or BEAM_PROFILES.R1
+  S.beamProfile = k; MODELS[1].map = clone(p.map)
+end
+applyBeamProfile("R1")
+
+local function newFixture(mi, dmx)
+  return {
+    model=MODELS[mi], mi=mi, id=#S.fixtures+1, dmx=dmx, sel=true,
+    panBase=128, tiltBase=128, dimBase=255, strobeBase=0, prismaBase=0, colorBase=0, goboBase=0, focusBase=128,
+    r=255, g=255, b=255, pan=128, tilt=128, panSmooth=128, tiltSmooth=128,
+    strobe=0, prisma=0, color=0, gobo=0, focus=128, dimOut=255, dimSmooth=255, chase=nil
+  }
+end
+
+local function autoPatch()
+  local a = 1
+  for _, f in ipairs(S.fixtures) do
+    local n = f.model.ch
+    if floor((a-1)/512) ~= floor((a+n-2)/512) then a = (floor((a-1)/512)+1)*512 + 1 end
+    f.dmx = a; a = a + n
+  end
+end
+
+local function scanSoundEquipment()
+  S.snd.objs, S.snd.rems, S.snd.pwrBtns, S.snd.guiInps = {}, {}, {}, {}
+  pcall(function()
+    for _, d in ipairs(workspace:GetDescendants()) do
+      if d:IsA("Sound") then
+        S.snd.objs[#S.snd.objs+1] = d
+      elseif d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+        local nm = string.upper(d.Name)
+        if nm ~= "UDP_DMXDATA" and (nm:find("SOUND") or nm:find("AUDIO") or nm:find("MUSIC") or nm:find("PLAY") or nm:find("ID") or nm:find("POWER") or nm:find("AMP") or nm:find("MIXER") or nm:find("VOL") or nm:find("PITCH")) then
+          S.snd.rems[#S.snd.rems+1] = d
+        end
+      elseif d:IsA("ClickDetector") or d:IsA("ProximityPrompt") then
+        local p = d.Parent and string.upper(d.Parent.Name) or ""
+        if p:find("POWER") or p:find("ON") or p:find("SWITCH") or p:find("SAKLAR") or p:find("GENSET") or p:find("AMP") then
+          S.snd.pwrBtns[#S.snd.pwrBtns+1] = d
+        end
+      end
+    end
+    local pg = LP:FindFirstChild("PlayerGui")
+    if pg then
+      for _, d in ipairs(pg:GetDescendants()) do
+        if d:IsA("TextBox") then
+          local ph = string.upper((d.PlaceholderText or "") .. (d.Name or ""))
+          if ph:find("ID") or ph:find("SOUND") or ph:find("AUDIO") or ph:find("MUSIC") then
+            S.snd.guiInps[#S.snd.guiInps+1] = d
+          end
+        elseif d:IsA("RemoteEvent") then
+          S.snd.rems[#S.snd.rems+1] = d
+        end
+      end
+    end
+  end)
+end
+
+local function togglePower(on)
+  S.snd.powerOn = on; scanSoundEquipment()
+  for _, b in ipairs(S.snd.pwrBtns) do
+    pcall(function()
+      if b:IsA("ClickDetector") and fireclickdetector then fireclickdetector(b)
+      elseif b:IsA("ProximityPrompt") and fireproximityprompt then fireproximityprompt(b) end
+    end)
+  end
+  for _, r in ipairs(S.snd.rems) do
+    local nm = string.upper(r.Name)
+    if r:IsA("RemoteEvent") and (nm:find("POWER") or nm:find("AMP") or nm:find("SWITCH")) then
+      pcall(function() r:FireServer(on); r:FireServer("Power", on) end)
+    end
+  end
+end
+
+local function playAudioId(raw, playState)
+  local num = tostring(raw or ""):match("(%d+)") or ""
+  if num == "" and playState then return end
+  local full = "rbxassetid://" .. num
+  S.snd.currentId = num; S.snd.playing = playState
+  scanSoundEquipment()
+  for _, tb in ipairs(S.snd.guiInps) do
+    pcall(function() tb.Text = num; if firesignal then pcall(firesignal, tb.FocusLost, true) end end)
+  end
+  for _, r in ipairs(S.snd.rems) do
+    if r:IsA("RemoteEvent") then
+      pcall(function()
+        if playState then
+          r:FireServer(full); r:FireServer(tonumber(num) or num)
+          r:FireServer("Play", full); r:FireServer({Action="Play", SoundId=full, Id=num, Volume=S.snd.vol/100, Pitch=S.snd.pitch/100})
+        else
+          r:FireServer("Stop"); r:FireServer(false); r:FireServer({Action="Stop"})
+        end
+      end)
+    end
+  end
+  for _, s in ipairs(S.snd.objs) do
+    pcall(function()
+      if playState then
+        if num ~= "" then s.SoundId = full end
+        s.Volume = (S.snd.vol/100)*3; s.PlaybackSpeed = S.snd.pitch/100
+        if not s.IsPlaying then s:Play() end
+      else s:Stop() end
+    end)
+  end
+end
+
+local function updateAudioMixer()
+  local vr, pr = S.snd.vol/100, S.snd.pitch/100
+  for _, s in ipairs(S.snd.objs) do
+    pcall(function()
+      local nm = string.upper(s.Name .. (s.Parent and s.Parent.Name or ""))
+      local g = 1
+      if nm:find("SUB") or nm:find("CLA") or nm:find("F1") or nm:find("BASS") then g = S.snd.subGain/100
+      elseif nm:find("MID") or nm:find("T24") or nm:find("LOW") then g = S.snd.midGain/100
+      elseif nm:find("HIGH") or nm:find("ARRAY") then g = S.snd.highGain/100 end
+      s.Volume = clamp(vr * g * 3, 0, 10); s.PlaybackSpeed = clamp(pr, 0.2, 3)
+      for _, fx in ipairs(s:GetChildren()) do
+        if fx:IsA("EqualizerSoundEffect") then
+          fx.LowGain = ((S.snd.subGain-100)/100)*10
+          fx.MidGain = ((S.snd.midGain-100)/100)*10
+          fx.HighGain = ((S.snd.highGain-100)/100)*10
+        end
+      end
+    end)
+  end
+end
+
+local function calcPT(sh, cfg, idx0, total, baseP)
+  if sh == "OFF" then return 0, 0 end
+  local half = math.max(1, (total-1)/2)
+  local norm = (total > 1) and ((idx0-half)/half) or 0
+  local distC = abs(norm)
+  local rowIdx, colIdx = floor(idx0/14), idx0%14
+  local colNorm = (colIdx-6.5)/6.5
+  local eff = (cfg.rep and cfg.rep > 0) and (idx0 % cfg.rep) or idx0
+  local rad = baseP + (eff * cfg.spread) * (pi/180)
+  local dx, dy = 0, 0
+
+  if sh == "Circle" then dx, dy = sin(rad), cos(rad)
+  elseif sh == "Figure 8" then dx, dy = sin(rad), sin(rad*2)
+  elseif sh == "Ballyhoo" then dx, dy = sin(rad)*0.65+cos(rad*1.5+idx0*0.35)*0.35, cos(rad*0.75)*0.65+sin(rad*2+idx0*0.25)*0.35
+  elseif sh == "Tilt Wave" then dx, dy = sin(rad*0.5)*0.15, sin(rad)
+  elseif sh == "Pan Wave" then dx, dy = sin(rad), cos(rad*0.5)*0.15
+  elseif sh == "Swing" then dx, dy = sin(rad), cos(rad*2)*0.55
+  elseif sh == "CanCan" then dx, dy = sin(rad*0.5)*0.28, sin(rad)
+  elseif sh == "Fan Spread" then dx, dy = norm*sin(baseP), cos(rad)*0.65
+  elseif sh == "V-Formation" then dx, dy = norm*0.75+sin(rad)*0.25, sin(baseP+(1-distC)*(pi*0.65))
+  elseif sh == "Crown" then dx, dy = sin(rad)*(0.4+0.6*distC), abs(cos(rad))*1.4-0.7
+  elseif sh == "Spiral Zoom" then local e=0.35+0.65*(sin(baseP*0.35)*0.5+0.5); dx, dy = sin(rad)*e, cos(rad)*e
+  elseif sh == "Infinity" then local d=1+sin(rad)^2*0.5; dx, dy = cos(rad)/d, (sin(rad)*cos(rad)*1.3)/d
+  elseif sh == "Butterfly" then dx, dy = sin(rad)*cos(rad*0.5), cos(rad)*sin(rad*2)
+  elseif sh == "Pendulum" then local s=sin(rad); dx, dy = s, (1-cos(s*pi*0.45))*1.4-0.7
+  elseif sh == "Cross Matrix" then dx, dy = sin(rad)*((idx0%2==0) and 1 or -1), cos(rad)
+  elseif sh == "Matrix Wave 28" then
+    local cRad = baseP + (colIdx*cfg.spread)*(pi/180)
+    dx, dy = sin(cRad*0.5)*((rowIdx%2==0) and 1 or -1)*0.65, cos(cRad+rowIdx*pi*0.5)
+  elseif sh == "Tunnel 28" then
+    local a = baseP + colNorm*pi
+    dx, dy = sin(a)*colNorm, cos(a)*((rowIdx%2==0) and 1 or -1)
+  elseif sh == "Helicopter" then dx, dy = sin(rad), cos(rad)*0.35+((idx0%2==0) and 0.35 or -0.35)*sin(baseP*0.5)
+  elseif sh == "Searchlight" then dx, dy = sin(rad*0.7)*0.8+sin(rad*1.9)*0.2, abs(cos(rad*0.85))*1.5-0.75
+  elseif sh == "Pan Sin" then dx, dy = sin(rad), 0
+  elseif sh == "Tilt Sin" then dx, dy = 0, sin(rad)
+  elseif sh == "Line Diag" then dx, dy = sin(rad), sin(rad)
+  elseif sh == "Box Smooth" then
+    dx = math.atan(sin(rad)*3.5)/(pi/2)
+    dy = math.atan(sin(rad+pi/2)*3.5)/(pi/2)
+  end
+
+  if cfg.mir and (idx0 >= total/2) then dx = -dx end
+  if cfg.inv and (idx0 % 2 == 1) then dy = -dy end
+  return dx * cfg.panSize, dy * cfg.tiltSize
+end
+
+local function calcDim(sh, cfg, idx0, total, baseP)
+  if sh == "OFF" then return 1 end
+  local half = math.max(1, (total-1)/2)
+  local distC = (total > 1) and (abs(idx0-half)/half) or 0
+  local eff = (cfg.rep and cfg.rep > 0) and (idx0 % cfg.rep) or idx0
+  local rad = baseP + (eff * cfg.spread) * (pi/180)
+  local cyc = (rad / (2*pi)) % 1
+  local mod = 1
+  if sh == "Sinus Wave" then mod = sin(rad)*0.5+0.5
+  elseif sh == "Soft Breathe" then local s=sin(rad)*0.5+0.5; mod = s*s*(3-2*s)
+  elseif sh == "Sparkle Smooth" then mod = (sin(baseP*2.3+idx0*3.7)*0.5+0.5)^3
+  elseif sh == "Center Out" then mod = sin(baseP - distC*pi*(cfg.spread/45))*0.5+0.5
+  elseif sh == "Bounce KITT" then
+    local sp = (sin(baseP)*0.5+0.5)*math.max(1, total-1)
+    local w = math.max(1.2, (total/5)*(cfg.spread/30+0.3))
+    mod = clamp(1 - abs(idx0-sp)/w, 0, 1)^1.5
+  elseif sh == "Pulse 1:1" then mod = (cyc < 0.5) and 1 or 0
+  elseif sh == "Pulse 2:1" then mod = (cyc < 0.66) and 1 or 0
+  elseif sh == "Chase Odd/Even" then mod = (((baseP/pi)%2 < 1) == (idx0%2 == 0)) and 1 or 0
+  elseif sh == "Random Flash" then mod = (sin(baseP*6.7+idx0*4.3) > 0.35) and 1 or 0 end
+  return 1 - clamp(cfg.size/255, 0, 1) * (1 - mod)
+end
+
+local function stepEffects(dt)
+  local maxL = 0
+  for _, s in ipairs(S.snd.objs) do
+    if s and s.Parent and s.IsPlaying and (s.PlaybackLoudness or 0) > maxL then maxL = s.PlaybackLoudness end
+  end
+  S.snd.liveLoudness = maxL
+  if #S.fixtures == 0 then return end
+
+  if S.test.on and S.test.autoScan then
+    S.test.scanTimer = S.test.scanTimer + dt
+    if S.test.scanTimer >= 1.2 then S.test.scanTimer = 0; S.test.ch = (S.test.ch % 16) + 1; if UI.refreshTest then UI.refreshTest() end end
+  end
+
+  local chaseOn = S.chasePlay and #S.chaseSteps > 0
+  local actPT, actPTCfg = S.ptShape, curPT()
+  local actDim, actDimCfg = S.dimShape, curDim()
+
+  for _, f in ipairs(S.fixtures) do
+    f.pan, f.tilt, f.strobe, f.prisma = f.panBase, f.tiltBase, f.strobeBase, f.prismaBase
+    f.color, f.gobo, f.focus, f.chase = f.colorBase, f.goboBase, f.focusBase, nil
+  end
+
+  if chaseOn then
+    local dur = 60 / math.max(1, S.chaseBpm)
+    S.chaseT = S.chaseT + dt
+    while S.chaseT >= dur do
+      S.chaseT = S.chaseT - dur
+      local nx = S.chaseIdx + S.chaseDir
+      if nx > #S.chaseSteps then nx = S.chaseLoop and 1 or #S.chaseSteps; if not S.chaseLoop then S.chasePlay = false end
+      elseif nx < 1 then nx = S.chaseLoop and #S.chaseSteps or 1; if not S.chaseLoop then S.chasePlay = false end end
+      S.chaseIdx = nx; if UI.refreshChase then UI.refreshChase() end
+    end
+    local a = S.chaseSteps[S.chaseIdx]
+    local b = S.chaseSteps[((S.chaseIdx - 1 + S.chaseDir) % #S.chaseSteps) + 1] or a
+    local hf = clamp(S.chaseHold/100, 0, 0.95)
+    local cf = math.max(0.01, 1-hf) * clamp(S.chaseCross/100, 0, 1)
+    local pr = S.chaseT / dur
+    local u = (pr > hf) and clamp((pr-hf)/cf, 0, 1) or 0
+    u = u * u * (3 - 2*u)
+    if a and a.fx and b and b.fx then
+      for _, f in ipairs(S.fixtures) do
+        local sa, sb = a.fx[f.id] or a.fx[tostring(f.id)], b.fx[f.id] or b.fx[tostring(f.id)]
+        if sa and sb then
+          f.pan = lerp(sa.pan or 128, sb.pan or 128, u); f.tilt = lerp(sa.tilt or 128, sb.tilt or 128, u)
+          f.strobe = lerp(sa.strobe or 0, sb.strobe or 0, u); f.prisma = lerp(sa.prisma or 0, sb.prisma or 0, u)
+          f.color = lerp(sa.color or 0, sb.color or 0, u); f.gobo = lerp(sa.gobo or 0, sb.gobo or 0, u)
+          f.chase = lerp(sa.dim or 255, sb.dim or 255, u)
+        end
+      end
+    end
+    if S.chaseIncShape and a and a.shape and a.shape.ptShape then
+      actPT = a.shape.ptShape
+      if a.shape.ptCfg then actPTCfg = a.shape.ptCfg end
+      if a.shape.dimShape then actDim = a.shape.dimShape; actDimCfg = a.shape.dimCfg or actDimCfg end
+    end
+  end
+
+  local dirf = actPTCfg.dir or 1
+  if dirf == 0 then dirf = (sin(S.ptPhase*0.25) >= 0) and 1 or -1 end
+  if actPT ~= "OFF" then S.ptPhase = S.ptPhase + ((actPTCfg.speed or 0.4)*2*pi)*dirf*dt end
+  if actDim ~= "OFF" then S.dimPhase = S.dimPhase + ((actDimCfg.speed or 0.8)*2*pi)*dt end
+
+  local beams = {}
+  for _, f in ipairs(S.fixtures) do if f.sel and f.model.kind == "beam" then beams[#beams+1] = f end end
+  if actPT ~= "OFF" and #beams > 0 then
+    for i, f in ipairs(beams) do
+      local ox, oy = calcPT(actPT, actPTCfg, i-1, #beams, S.ptPhase)
+      f.pan = clamp((chaseOn and f.pan or f.panBase) + ox, 0, 255)
+      f.tilt = clamp((chaseOn and f.tilt or f.tiltBase) + oy, 0, 255)
+    end
+  end
+
+  local sm = clamp(actPTCfg.smooth or 88, 0, 98)
+  local aPT = (sm <= 5) and 1 or clamp(1 - math.exp(-(105-sm)*0.35*dt), 0.05, 1)
+  local aDm = clamp(1 - math.exp(-28*dt), 0.1, 1)
+  local nonFog = {}
+  for _, f in ipairs(S.fixtures) do if f.sel and f.model.kind ~= "fog" then nonFog[#nonFog+1] = f end end
+  local dIdx = 0
+  local beatN = clamp(maxL / math.max(100, (110 - S.snd.beatSens)*8), 0, 1)
+
+  for _, f in ipairs(S.fixtures) do
+    f.panSmooth = lerp(f.panSmooth or f.pan, f.pan, aPT)
+    f.tiltSmooth = lerp(f.tiltSmooth or f.tilt, f.tilt, aPT)
+    local base = (f.chase ~= nil) and f.chase or f.dimBase
+    local mult = 1
+    if actDim ~= "OFF" and f.sel and f.model.kind ~= "fog" then
+      dIdx = dIdx + 1
+      mult = calcDim(actDim, actDimCfg, dIdx-1, #nonFog, S.dimPhase)
+    end
+    if S.snd.beatSyncDim and f.sel and f.model.kind ~= "fog" then mult = mult * clamp(0.15 + beatN*0.95, 0, 1) end
+    if S.snd.beatSyncStrobe and f.sel and beatN > 0.72 then f.strobe = 210 end
+    local tgt = S.blackout and 0 or (base * mult)
+    f.dimOut = tgt; f.dimSmooth = lerp(f.dimSmooth or tgt, tgt, aDm)
+  end
+end
+
+local function autoGenerateChase(kind)
+  S.chaseSteps = {}
+  local function mk(pAdd, tAdd, dm, sh, col, gob, str)
+    local fx = {}
+    for i, f in ipairs(S.fixtures) do
+      local odd, left = (i%2==1), (i <= #S.fixtures/2)
+      local d = 255
+      if dm=="ODD" then d = odd and 255 or 0 elseif dm=="EVEN" then d = (not odd) and 255 or 0
+      elseif dm=="LEFT" then d = left and 255 or 0 elseif dm=="RIGHT" then d = (not left) and 255 or 0 end
+      fx[f.id] = {
+        pan=round(clamp(S.panCenter+(left and pAdd or -pAdd),0,255)),
+        tilt=round(clamp(S.tiltCenter+tAdd,0,255)),
+        strobe=str or 0, prisma=(str and str>0) and 128 or 0, color=col or 0, gobo=gob or 0, dim=d
+      }
+    end
+    return {fx=fx, shape={ptShape=sh, ptCfg=clone(S.ptConfigs[sh] or DEF_PT.Circle), dimShape="OFF", dimCfg=clone(DEF_DIM.OFF)}}
+  end
+  if kind == "CONCERT" then
+    S.chaseBpm=95; S.chaseCross=75; S.chaseHold=25; S.chaseIncShape=true
+    S.chaseSteps={mk(0,-45,"ALL","Fan Spread",0,0,0), mk(35,20,"ODD","Tilt Wave",35,0,0), mk(-35,20,"EVEN","Tilt Wave",70,0,0), mk(0,50,"ALL","Ballyhoo",110,40,0), mk(45,-20,"LEFT","Circle",145,0,0), mk(-45,-20,"RIGHT","Circle",180,0,0), mk(0,35,"ALL","Matrix Wave 28",215,80,0), mk(0,0,"ALL","Crown",0,0,180)}
+  elseif kind == "HOREG" then
+    S.chaseBpm=128; S.chaseCross=30; S.chaseHold=60; S.chaseIncShape=true
+    S.chaseSteps={mk(0,45,"ODD","CanCan",25,0,0), mk(0,-45,"EVEN","CanCan",60,0,0), mk(50,25,"LEFT","Cross Matrix",95,0,0), mk(-50,25,"RIGHT","Cross Matrix",135,0,0), mk(0,55,"ALL","Helicopter",175,0,190), mk(0,0,"ALL","V-Formation",0,0,0)}
+  elseif kind == "SWEEP" then
+    S.chaseBpm=65; S.chaseCross=90; S.chaseHold=10; S.chaseIncShape=true
+    S.chaseSteps={mk(-55,-35,"ALL","Infinity",0,0,0), mk(55,35,"ALL","Tunnel 28",50,0,0), mk(0,60,"ALL","Spiral Zoom",90,0,0), mk(0,-30,"ALL","Searchlight",0,0,0)}
+  elseif kind == "DROP" then
+    S.chaseBpm=145; S.chaseCross=10; S.chaseHold=80; S.chaseIncShape=true
+    S.chaseSteps={mk(0,40,"ODD","Box Smooth",0,0,220), mk(0,-40,"EVEN","Box Smooth",80,0,220), mk(40,0,"ALL","Ballyhoo",160,0,240), mk(0,55,"ALL","Crown",0,0,0)}
+  end
+  S.chaseIdx=1; S.chaseT=0; S.chasePlay=true
+  if UI.refreshChase then UI.refreshChase() end
+end
+
+local function outVal(f, p)
+  local eff = S.blackout and 0 or clamp(round((f.dimSmooth or f.dimOut)*(S.master/100)), 0, 255)
+  if p=="dimmer" then return eff elseif p=="pan" then return clamp(round(f.panSmooth or f.pan),0,255)
+  elseif p=="tilt" then return clamp(round(f.tiltSmooth or f.tilt),0,255) elseif p=="strobe" then return round(f.strobe)
+  elseif p=="prisma" then return round(f.prisma) elseif p=="color" then return round(f.color)
+  elseif p=="gobo" then return round(f.gobo) elseif p=="focus" then return round(f.focus)
+  elseif p=="r" then return round(f.r) elseif p=="g" then return round(f.g) elseif p=="b" then return round(f.b) end
+  return nil
+end
+
+local function buildFrame()
+  local U = {}
+  local function put(a, v)
+    if a < 1 or a > 4096 then return end
+    local u, c = floor((a-1)/512)+1, (a-1)%512+1
+    if not U[u] then U[u] = {} end
+    U[u][c] = clamp(round(v), 0, 255)
+  end
+  for _, f in ipairs(S.fixtures) do
+    local m = f.model
+    for ch, val in pairs(m.fixed) do put(f.dmx+tonumber(ch)-1, val) end
+    for param, chs in pairs(m.map) do
+      local v = outVal(f, param)
+      if v ~= nil then
+        if type(chs)=="table" then for _, c in ipairs(chs) do put(f.dmx+c-1, v) end
+        else put(f.dmx+chs-1, v) end
+      end
+    end
+    if S.test.on and f.sel and f.mi == S.model and S.test.ch <= m.ch then put(f.dmx+S.test.ch-1, S.test.val) end
+  end
+  return U
+end
+
+local function scanDMXRemotes()
+  local list = {}
+  pcall(function()
+    for _, d in ipairs(workspace:GetDescendants()) do
+      if d:IsA("RemoteEvent") and (d.Name == "UDP_DMXDATA" or string.upper(d.Name):find("DMX")) then
+        list[#list+1] = d
+      end
+    end
+  end)
+  return list
+end
+
+local function findRemote()
+  if S.remote and S.remote.Parent and not S.autoScanRemote then return S.remote end
+  local ok, r = pcall(function()
+    local v = workspace:FindFirstChild("Vehicles")
+    if v then
+      local c = v:FindFirstChild(LP.Name .. "'s Car") or v:FindFirstChild(LP.Name)
+      if c then
+        local rm = c:FindFirstChild("UDP_DMXDATA", true)
+        if rm and rm:IsA("RemoteEvent") then return rm end
+      end
+    end
+    for _, d in ipairs(workspace:GetDescendants()) do
+      if d:IsA("RemoteEvent") and (d.Name == "UDP_DMXDATA" or string.upper(d.Name):find("DMX")) then return d end
+    end
+    return nil
+  end)
+  if ok and r then S.carName = r.Parent and r.Parent.Name or r.Name; return r end
+  S.carName = "BELUM ADA"; return nil
+end
+
+local function sendFrame()
+  if #S.fixtures == 0 or not S.remote or not S.remote.Parent then return end
+  local U = buildFrame()
+  local payload = {}
+  for u, t in pairs(U) do
+    local b = buffer.create(512)
+    for c, v in pairs(t) do buffer.writeu8(b, c-1, v) end
+    payload[u] = b
+  end
+  pcall(S.remote.FireServer, S.remote, payload)
+end
+
+local function fileOk() return type(writefile)=="function" and type(readfile)=="function" end
+local function snapshotAll()
+  local fx = {}
+  for _, f in ipairs(S.fixtures) do
+    fx[#fx+1] = {mi=f.mi, dmx=f.dmx, sel=f.sel, dimBase=f.dimBase, panBase=f.panBase, tiltBase=f.tiltBase, strobeBase=f.strobeBase, prismaBase=f.prismaBase, colorBase=f.colorBase, goboBase=f.goboBase, focusBase=f.focusBase}
+  end
+  local cOut = {}
+  for k, v in pairs(S.cues) do cOut[tostring(k)] = v end
+  return {
+    fixtures=fx, cues=cOut, chaseSteps=S.chaseSteps, chaseBanks=S.chaseBanks,
+    beamMap=MODELS[1].map, customProfileMap=BEAM_PROFILES.CUSTOM.map,
+    ptConfigs=S.ptConfigs, dimConfigs=S.dimConfigs, playlist=S.snd.playlist,
+    set={master=S.master, beamProfile=S.beamProfile, ptShape=S.ptShape, panCenter=S.panCenter, tiltCenter=S.tiltCenter, dimShape=S.dimShape, chaseBpm=S.chaseBpm, chaseCross=S.chaseCross, chaseHold=S.chaseHold, chaseIncShape=S.chaseIncShape, chaseLoop=S.chaseLoop, chaseDir=S.chaseDir}
+  }
+end
+
+local function applySnapshot(d)
+  if type(d) ~= "table" then return end
+  if type(d.customProfileMap)=="table" then BEAM_PROFILES.CUSTOM.map = clone(d.customProfileMap) end
+  if type(d.set)=="table" and d.set.beamProfile then applyBeamProfile(d.set.beamProfile) end
+  if type(d.beamMap)=="table" then MODELS[1].map = clone(d.beamMap) end
+  if type(d.ptConfigs)=="table" then for k, v in pairs(d.ptConfigs) do S.ptConfigs[k] = clone(v) end end
+  if type(d.dimConfigs)=="table" then for k, v in pairs(d.dimConfigs) do S.dimConfigs[k] = clone(v) end end
+  if type(d.playlist)=="table" then S.snd.playlist = clone(d.playlist) end
+  if type(d.fixtures)=="table" then
+    S.fixtures = {}
+    for _, x in ipairs(d.fixtures) do
+      local mi = tonumber(x.mi)
+      if mi and MODELS[mi] then
+        local f = newFixture(mi, tonumber(x.dmx) or 1)
+        f.sel = x.sel and true or false; f.dimBase = tonumber(x.dimBase) or 255
+        f.panBase = tonumber(x.panBase) or 128; f.tiltBase = tonumber(x.tiltBase) or 128
+        f.strobeBase = tonumber(x.strobeBase) or 0; f.prismaBase = tonumber(x.prismaBase) or 0
+        f.colorBase = tonumber(x.colorBase) or 0; f.goboBase = tonumber(x.goboBase) or 0; f.focusBase = tonumber(x.focusBase) or 128
+        f.dimOut = f.dimBase; f.dimSmooth = f.dimBase; f.panSmooth = f.panBase; f.tiltSmooth = f.tiltBase
+        S.fixtures[#S.fixtures+1] = f
+      end
+    end
+  end
+  if type(d.cues)=="table" then S.cues = {}; for k, v in pairs(d.cues) do S.cues[tonumber(k) or k] = v end end
+  if type(d.chaseSteps)=="table" then S.chaseSteps = clone(d.chaseSteps) end
+  if type(d.chaseBanks)=="table" then S.chaseBanks = clone(d.chaseBanks) end
+  if type(d.set)=="table" then
+    local st = d.set
+    S.master = tonumber(st.master) or 100; S.ptShape = st.ptShape or "OFF"
+    S.panCenter = tonumber(st.panCenter) or 128; S.tiltCenter = tonumber(st.tiltCenter) or 128
+    S.dimShape = st.dimShape or "OFF"; S.chaseBpm = tonumber(st.chaseBpm) or 90
+    S.chaseCross = tonumber(st.chaseCross) or 65; S.chaseHold = tonumber(st.chaseHold) or 35
+    if st.chaseIncShape ~= nil then S.chaseIncShape = st.chaseIncShape end
+    if st.chaseLoop ~= nil then S.chaseLoop = st.chaseLoop end
+    S.chaseDir = tonumber(st.chaseDir) or 1
+  end
+end
+
+local function writeSaves() if fileOk() then pcall(function() writefile(FILE, HttpService:JSONEncode({saves=S.saves})) end) end end
+local function readSaves()
+  if not fileOk() then return end
+  local ok, d = pcall(function() if isfile and not isfile(FILE) then return nil end return HttpService:JSONDecode(readfile(FILE)) end)
+  if ok and type(d)=="table" and type(d.saves)=="table" then S.saves = d.saves end
+end
+
+readSaves()
+if S.saves.__AUTO then
+  if S.saves.__AUTO.chaseBanks then S.chaseBanks = clone(S.saves.__AUTO.chaseBanks) end
+  if S.saves.__AUTO.playlist then S.snd.playlist = clone(S.saves.__AUTO.playlist) end
+  if S.saves.__AUTO.customProfileMap then BEAM_PROFILES.CUSTOM.map = clone(S.saves.__AUTO.customProfileMap) end
+end
+UI.rebuildAll(); UI.refreshShape(); UI.refreshCue(); UI.refreshChase(); UI.refreshSaves(); UI.refreshSoundTab()
+switchTab("Fixture")
+
+local acc, uiAcc, carAcc = 0, 0, 0
+track(RunService.Heartbeat:Connect(function(dt)
+  if not S.running then return end
+  stepEffects(dt)
+  acc = acc + dt; if acc >= 1/SEND_HZ then acc = 0; sendFrame() end
+  uiAcc = uiAcc + dt
+  if uiAcc >= 0.1 then
+    uiAcc = 0
+    local f = S.fixtures[1]
+    if f then
+      local c = curPT()
+      UI.liveTxt.Text = string.format("Shape: %s (Spd %.2fHz | Spr %d deg | Smooth %d%%)\\nPan = %d | Tilt = %d | Dim = %d", S.ptShape, c.speed, round(c.spread), round(c.smooth or 88), round(f.panSmooth or f.pan), round(f.tiltSmooth or f.tilt), round(f.dimSmooth or f.dimOut))
+    end
+    if S.tab == "Sound" then UI.vuLbl.Text = "Live Bass Meter (PlaybackLoudness): "..round(S.snd.liveLoudness) end
+  end
+  carAcc = carAcc + dt
+  if carAcc >= 1.5 then
+    carAcc = 0; S.remote = findRemote()
+    local now = (S.remote ~= nil)
+    if now ~= S.car then S.car = now; UI.corStatusLbl.Text = S.remote and ("Terhubung: "..S.remote:GetFullName()) or "Belum ada UDP_DMXDATA"; UI.refreshFooter() end
+  end
+end))
+
+local function stop()
+  S.running = false
+  for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
+  pcall(function() UI.gui:Destroy() end)
+  if _G.WANZZMIXER and _G.WANZZMIXER.id == S.id then _G.WANZZMIXER = nil end
+end
+S.id = tostring(os.clock())..tostring(random(1,1e6))
+track(UI.closeBtn.Activated:Connect(stop))
+_G.WANZZMIXER = {stop=stop, id=S.id}
+print("[WANZZMIXER V7.2 SERVERLESS] Berhasil dijalankan!")
+`;
+
+module.exports = (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+
+  const accept = (req.headers["accept"] || "").toLowerCase();
+  const ua = (req.headers["user-agent"] || "").toLowerCase();
+  const isRawQuery = req.query && (req.query.raw === "1" || req.query.raw === "true");
+
+  if (isRawQuery || ua.includes("roblox") || !accept.includes("text/html")) {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    return res.status(200).send(LUA_SCRIPT);
+  }
+
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "domain-kamu.vercel.app";
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const rawUrl = `${proto}://${host}/api?raw=1`;
+  const loadCmd = `loadstring(game:HttpGet("${rawUrl}"))()`;
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.status(200).send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WANZZMIXER V7.2 - Loadstring Generator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: monospace; }
+    body { background: #0e0e12; color: #f4f4f6; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .card { background: #16161d; border: 1.5px solid #484856; padding: 24px; max-width: 560px; width: 100%; }
+    .badge { background: #fff; color: #000; display: inline-block; padding: 4px 8px; font-weight: bold; font-size: 12px; margin-bottom: 14px; }
+    h1 { font-size: 16px; margin-bottom: 8px; }
+    p { color: #a0a0ac; font-size: 12px; margin-bottom: 16px; line-height: 1.5; }
+    .code-box { background: #0a0a0e; border: 1px solid #484856; padding: 14px; color: #22c55e; font-size: 12px; word-break: break-all; margin-bottom: 14px; }
+    .btn-row { display: flex; gap: 10px; }
+    button, a.btn { flex: 1; background: #fff; color: #000; border: none; padding: 12px; font-weight: bold; font-size: 12px; cursor: pointer; text-align: center; text-decoration: none; }
+    a.btn { background: #262630; color: #fff; border: 1px solid #484856; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">PEARL 1024B // WANZZMIXER V7.2</div>
+    <h1>Loadstring Loader (Anti-Kepotong Delta)</h1>
+    <p>Salin 1 baris perintah di bawah ini, lalu tempel dan klik <b>EXECUTE</b> di dalam Delta Executor:</p>
+    <div class="code-box" id="cmd">${loadCmd}</div>
+    <div class="btn-row">
+      <button onclick="navigator.clipboard.writeText(document.getElementById('cmd').innerText); this.innerText='BERHASIL DISALIN!'; setTimeout(()=>this.innerText='COPY LOADSTRING', 1500);">COPY LOADSTRING</button>
+      <a class="btn" href="${rawUrl}" target="_blank">LIHAT RAW LUA</a>
+    </div>
+  </div>
+</body>
+</html>`);
+};
